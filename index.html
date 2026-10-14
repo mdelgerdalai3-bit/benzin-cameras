@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="mn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ШТС Камерууд</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #181b22; --line: #2a2f3a; --text: #e8eaf0;
+    --muted: #8b93a7; --accent: #f5a524; --ok: #3ccf7a; --bad: #ef5b5b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--panel);
+    border-bottom: 1px solid var(--line); padding: 10px 16px;
+    display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+  h1 { font-size: 16px; margin: 0 8px 0 0; white-space: nowrap; }
+  h1 span { color: var(--accent); }
+  input, select, button { font: inherit; color: var(--text); background: #0f1115;
+    border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  input[type=search] { min-width: 200px; flex: 1 1 200px; max-width: 360px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  .stat { color: var(--muted); margin-left: auto; white-space: nowrap; }
+  .pager { display: flex; gap: 6px; align-items: center; }
+  main { padding: 12px 16px 24px; }
+  .grid { display: grid; gap: 8px; grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); }
+  .tile { position: relative; background: #000; border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden; aspect-ratio: 16 / 9; }
+  .tile video { width: 100%; height: 100%; object-fit: cover; display: block; background: #000; }
+  .tile .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 10px 6px;
+    background: linear-gradient(transparent, rgba(0,0,0,.85)); pointer-events: none; }
+  .tile .cap b { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .cap small { display: block; color: #c3c8d4; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .badge { position: absolute; top: 6px; left: 6px; font-size: 11px; padding: 2px 7px;
+    border-radius: 999px; background: rgba(0,0,0,.65); color: var(--muted); }
+  .tile .badge.live { color: var(--ok); }
+  .tile .badge.err { color: var(--bad); }
+  .tile .tools { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity .15s; }
+  .tile:hover .tools { opacity: 1; }
+  .tile .tools button { padding: 2px 8px; font-size: 12px; background: rgba(0,0,0,.65); }
+  .tile.fav { border-color: var(--accent); }
+  .empty { color: var(--muted); padding: 40px; text-align: center; }
+  .warn { background: #3a2a10; color: #ffd28a; border: 1px solid #6b4c16; padding: 10px 14px;
+    border-radius: 8px; margin-bottom: 12px; }
+  #big { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.92);
+    display: flex; flex-direction: column; padding: 16px; }
+  #big[hidden] { display: none; }
+  #big .bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+  #big video { flex: 1; width: 100%; min-height: 0; background: #000; border-radius: 8px; }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr !important; } .stat { margin-left: 0; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>⛽ <span>benzin.mn</span> камерууд</h1>
+  <input type="search" id="q" placeholder="Хайх: уулзвар, ШТС, дүүрэг…">
+  <select id="district"><option value="">Бүх дүүрэг</option></select>
+  <label><input type="checkbox" id="favOnly"> ★ Зөвхөн дуртай</label>
+  <select id="per">
+    <option value="4">4 / хуудас</option>
+    <option value="6">6 / хуудас</option>
+    <option value="9" selected>9 / хуудас</option>
+    <option value="12">12 / хуудас</option>
+    <option value="16">16 / хуудас</option>
+    <option value="999">Бүгд</option>
+  </select>
+  <div class="pager">
+    <button id="prev">◀</button><span id="pageInfo">1/1</span><button id="next">▶</button>
+  </div>
+  <label><input type="checkbox" id="rotate"> Автомат солих (<input id="rotSec" type="number" value="30" min="10" style="width:56px;padding:2px 4px">с)</label>
+  <button id="reload" title="Жагсаалтыг benzin.mn-ээс дахин татах">⟳ Шинэчлэх</button>
+  <span class="stat" id="stat">Ачаалж байна…</span>
+</header>
+<main>
+  <div id="warn"></div>
+  <div class="grid" id="grid"></div>
+</main>
+<div id="big" hidden>
+  <div class="bar"><div><b id="bigTitle"></b><br><small id="bigSub" style="color:var(--muted)"></small></div>
+    <button id="bigClose">✕ Хаах (Esc)</button></div>
+  <video id="bigVideo" muted autoplay playsinline controls></video>
+</div>
+
+<script>
+/* Камерын жагсаалтыг benzin.mn/api/stations-ээс шууд татна (CORS нээлттэй).
+   Татаж чадахгүй бол доорх хадгалсан хуулбарыг ашиглана. */
+const FALLBACK = [{"name":"Жаст Ойл ШТС1","district":"Баянгол","lat":47.9047673,"lon":106.8545039,"cams":[{"url":"https://stream.ubtraffic.mn/live/101017.stream_480p/playlist.m3u8","label":"Гурвалжингийн гүүрний урд уулзвар — Хөсөг трейд"}]},{"name":"Жаст ойл","district":"Баянгол","lat":47.909543,"lon":106.8163215,"cams":[{"url":"https://stream.ubtraffic.mn/live/101046.stream_480p/playlist.m3u8","label":"5-н шарны автобусны явган гарц"}]},{"name":"МТ штс","district":"Баянгол","lat":47.9214657,"lon":106.8096967,"cams":[{"url":"https://stream.ubtraffic.mn/live/101020.stream_480p/playlist.m3u8","label":"Толгойтын Магнай трейд ШТС-н урд уулзвар"}]},{"name":"Сод Монгол","district":"Баянгол","lat":47.9024127,"lon":106.8569873,"cams":[{"url":"https://stream.ubtraffic.mn/live/101017.stream_480p/playlist.m3u8","label":"Гурвалжингийн гүүрний урд уулзвар — Хөсөг трейд"}]},{"name":"УБ ШТС-11","district":"Баянгол","lat":47.9094339,"lon":106.8049171,"cams":[{"url":"https://stream.ubtraffic.mn/live/101047.stream_480p/playlist.m3u8","label":"396-р км-н галт тэрэгний гарам"}]},{"name":"УБ ШТС-15","district":"Баянгол","lat":47.8726894,"lon":106.8342026,"cams":[{"url":"https://stream.ubtraffic.mn/live/101054.stream_480p/playlist.m3u8","label":"Яармагийн 1-р буудлын явган хүний гарц"}]},{"name":"УБ ШТС-17","district":"Баянгол","lat":47.9023877,"lon":106.8563719,"cams":[{"url":"https://stream.ubtraffic.mn/live/101017.stream_480p/playlist.m3u8","label":"Гурвалжингийн гүүрний урд уулзвар — Хөсөг трейд"}]},{"name":"УБ ШТС-26","district":"Баянгол","lat":47.868194,"lon":106.822365,"cams":[{"url":"https://stream.ubtraffic.mn/live/101053.stream_480p/playlist.m3u8","label":"Яармагийн 2-р буудлын явган хүний гарц"}]},{"name":"ШТС (нэргүй)","district":"Баянгол","lat":47.918382,"lon":106.8560201,"cams":[{"url":"https://stream.ubtraffic.mn/live/101036.stream_480p/playlist.m3u8","label":"ГССҮТ-н баруун урд уулзвар"}]},{"name":"ШТС (нэргүй)","district":"Баянгол","lat":47.8826871,"lon":106.8614125,"cams":[{"url":"https://stream.ubtraffic.mn/live/55484.stream_480p/playlist.m3u8","label":"Яармагийн гүүр"}]},{"name":"ШТС-04 Нүхт","district":"Баянгол","lat":47.8689445,"lon":106.825082,"cams":[{"url":"https://stream.ubtraffic.mn/live/101053.stream_480p/playlist.m3u8","label":"Яармагийн 2-р буудлын явган хүний гарц"}]},{"name":"Юни Газ","district":"Баянгол","lat":47.9095187,"lon":106.8157559,"cams":[{"url":"https://stream.ubtraffic.mn/live/101046.stream_480p/playlist.m3u8","label":"5-н шарны автобусны явган гарц"}]},{"name":"дашваанжил","district":"Баянгол","lat":47.9168171,"lon":106.8552435,"cams":[{"url":"https://stream.ubtraffic.mn/live/101036.stream_480p/playlist.m3u8","label":"ГССҮТ-н баруун урд уулзвар"}]},{"name":"M-Ойл ШТС","district":"Баянзүрх","lat":47.9077705,"lon":106.9703838,"cams":[{"url":"https://stream.ubtraffic.mn/live/7003.stream_480p/playlist.m3u8","label":"137 Чулуу овооны тойрог"}]},{"name":"MT","district":"Баянзүрх","lat":47.9052455,"lon":107.0175968,"cams":[{"url":"https://stream.ubtraffic.mn/live/101024.stream_480p/playlist.m3u8","label":"142-р сургуулийн урд явган хүний гарц"}]},{"name":"MT ШТС","district":"Баянзүрх","lat":47.9160321,"lon":106.9758009,"cams":[{"url":"https://stream.ubtraffic.mn/live/40158.stream_480p/playlist.m3u8","label":"136 Офицерийн тойрог"}]},{"name":"Nes oil","district":"Баянзүрх","lat":47.91302436092825,"lon":106.97738053163218,"cams":[{"url":"https://stream.ubtraffic.mn/live/7003.stream_480p/playlist.m3u8","label":"137 Чулуу овооны тойрог"},{"url":"https://stream.ubtraffic.mn/live/40158.stream_480p/playlist.m3u8","label":"136 Офицерийн тойрог"}]},{"name":"Гор газ","district":"Баянзүрх","lat":47.9079475,"lon":106.9377008,"cams":[{"url":"https://stream.ubtraffic.mn/live/101040.stream_480p/playlist.m3u8","label":""},{"url":"https://stream.ubtraffic.mn/live/101013.stream_480p/playlist.m3u8","label":"Баянмонгол хорооллын хойд явган хүний гарц"},{"url":"https://stream.ubtraffic.mn/live/101041.stream_480p/playlist.m3u8","label":"Баянмонгол хорооллын хойд явган хүний гарц (3)"}]},{"name":"Жаст Ойл","district":"Баянзүрх","lat":47.9185691,"lon":106.9425337,"cams":[{"url":"https://stream.ubtraffic.mn/live/32786.stream_480p/playlist.m3u8","label":"Зүүн 4-зам"},{"url":"https://stream.ubtraffic.mn/live/101038.stream_480p/playlist.m3u8","label":"Зүүн 4-н замын уулзвар"}]},{"name":"МТ ШТС","district":"Баянзүрх","lat":47.9241898,"lon":106.9495126,"cams":[{"url":"https://stream.ubtraffic.mn/live/101028.stream_480p/playlist.m3u8","label":"Хил хамгаалах ЕГ-н баруун хойд уулзвар"}]},{"name":"Монсуль ШТС","district":"Баянзүрх","lat":47.9077377,"lon":106.9477008,"cams":[{"url":"https://stream.ubtraffic.mn/live/101039.stream_480p/playlist.m3u8","label":"Нарантуул ХТ-н баруун урд уулзвар"}]},{"name":"Петровес","district":"Баянзүрх","lat":47.9182371,"lon":106.944453,"cams":[{"url":"https://stream.ubtraffic.mn/live/32786.stream_480p/playlist.m3u8","label":"Зүүн 4-зам"},{"url":"https://stream.ubtraffic.mn/live/101038.stream_480p/playlist.m3u8","label":"Зүүн 4-н замын уулзвар"}]},{"name":"Петровис","district":"Баянзүрх","lat":47.9156275,"lon":106.9765961,"cams":[{"url":"https://stream.ubtraffic.mn/live/40158.stream_480p/playlist.m3u8","label":"136 Офицерийн тойрог"}]},{"name":"Петровис ШТС","district":"Баянзүрх","lat":47.9135446,"lon":106.9766813,"cams":[{"url":"https://stream.ubtraffic.mn/live/40158.stream_480p/playlist.m3u8","label":"136 Офицерийн тойрог"}]},{"name":"Сод Монгол ШТС 2","district":"Баянзүрх","lat":47.9120063,"lon":106.9810315,"cams":[{"url":"https://stream.ubtraffic.mn/live/7003.stream_480p/playlist.m3u8","label":"137 Чулуу овооны тойрог"}]},{"name":"Сод Монгол ШТС-27","district":"Баянзүрх","lat":47.9237,"lon":106.9658417,"cams":[{"url":"https://stream.ubtraffic.mn/live/101018.stream_480p/playlist.m3u8","label":"Монелийн уулзвар"},{"url":"https://stream.ubtraffic.mn/live/101026.stream_480p/playlist.m3u8","label":"Монелийн уулзвар (2)"},{"url":"https://stream.ubtraffic.mn/live/101027.stream_480p/playlist.m3u8","label":"Монелийн уулзвар (3)"}]},{"name":"Сод Монгол ШТС-3","district":"Баянзүрх","lat":47.923167,"lon":106.9860274,"cams":[{"url":"https://stream.ubtraffic.mn/live/101011.stream_480p/playlist.m3u8","label":"Батлан хамгаалах их сургуулийн хойд тойрог"}]},{"name":"Сод Монгол ШТС-49","district":"Баянзүрх","lat":47.9079256,"lon":107.0096027,"cams":[{"url":"https://stream.ubtraffic.mn/live/101024.stream_480p/playlist.m3u8","label":"142-р сургуулийн урд явган хүний гарц"}]},{"name":"Сод монгол ШТС","district":"Баянзүрх","lat":47.9170108,"lon":106.9638222,"cams":[{"url":"https://stream.ubtraffic.mn/live/101037.stream_480p/playlist.m3u8","label":"БЗД-н хойд явган хүний гарц"}]},{"name":"УБ ШТС-19","district":"Баянзүрх","lat":47.924401,"lon":106.9723404,"cams":[{"url":"https://stream.ubtraffic.mn/live/101025.stream_480p/playlist.m3u8","label":"Цайз захын баруун урд уулзвар"}]},{"name":"УБ ШТС-21","district":"Баянзүрх","lat":47.9156578,"lon":106.9690134,"cams":[{"url":"https://stream.ubtraffic.mn/live/40158.stream_480p/playlist.m3u8","label":"136 Офицерийн тойрог"}]},{"name":"ШТС-07 Нарантуул","district":"Баянзүрх","lat":47.9078562,"lon":106.9419376,"cams":[{"url":"https://stream.ubtraffic.mn/live/101039.stream_480p/playlist.m3u8","label":"Нарантуул ХТ-н баруун урд уулзвар"}]},{"name":"ЮниГаз AGS-3","district":"Баянзүрх","lat":47.915903,"lon":106.9768273,"cams":[{"url":"https://stream.ubtraffic.mn/live/40158.stream_480p/playlist.m3u8","label":"136 Офицерийн тойрог"}]},{"name":"Сод Монгол ШТС-121","district":"Сонгинохайрхан","lat":47.8956441,"lon":106.7852193,"cams":[{"url":"https://stream.ubtraffic.mn/live/101049.stream_480p/playlist.m3u8","label":"Сонсголонгийн уулзвар (2)"}]},{"name":"УБ ШТС","district":"Сонгинохайрхан","lat":47.8944041797116,"lon":106.7850592718835,"cams":[{"url":"https://stream.ubtraffic.mn/live/101049.stream_480p/playlist.m3u8","label":"Сонсголонгийн уулзвар (2)"}]},{"name":"ШТС (нэргүй)","district":"Сонгинохайрхан","lat":47.8923768,"lon":106.7845095,"cams":[{"url":"https://stream.ubtraffic.mn/live/101049.stream_480p/playlist.m3u8","label":"Сонсголонгийн уулзвар (2)"}]},{"name":"ШТС - 31","district":"Сонгинохайрхан","lat":47.890291036001415,"lon":106.7858898639679,"cams":[{"url":"https://stream.ubtraffic.mn/live/101016.stream_480p/playlist.m3u8","label":"Сонсголонгийн уулзвар"},{"url":"https://stream.ubtraffic.mn/live/101049.stream_480p/playlist.m3u8","label":"Сонсголонгийн уулзвар (2)"},{"url":"https://stream.ubtraffic.mn/live/101050.stream_480p/playlist.m3u8","label":"Сонсголонгийн уулзвар (3)"}]},{"name":"Шунхлай ШТС","district":"Сонгинохайрхан","lat":47.9099552,"lon":106.7990035,"cams":[{"url":"https://stream.ubtraffic.mn/live/101047.stream_480p/playlist.m3u8","label":"396-р км-н галт тэрэгний гарам"}]},{"name":"Жаст Ойл ШТС","district":"Сүхбаатар","lat":47.9398529,"lon":106.9161988,"cams":[{"url":"https://stream.ubtraffic.mn/live/101022.stream_480p/playlist.m3u8","label":"32-р тойргийн уулзвар — Шунхлай"}]},{"name":"МТ ШТС","district":"Сүхбаатар","lat":47.908555,"lon":106.9345845,"cams":[{"url":"https://stream.ubtraffic.mn/live/101041.stream_480p/playlist.m3u8","label":""},{"url":"https://stream.ubtraffic.mn/live/101013.stream_480p/playlist.m3u8","label":"Баянмонгол хорооллын хойд явган хүний гарц"},{"url":"https://stream.ubtraffic.mn/live/101040.stream_480p/playlist.m3u8","label":"Баянмонгол хорооллын хойд явган хүний гарц (2)"}]},{"name":"Магнай Трейд","district":"Сүхбаатар","lat":47.9287605,"lon":106.9349628,"cams":[{"url":"https://stream.ubtraffic.mn/live/101029.stream_480p/playlist.m3u8","label":"Дарь эхийн уулзвар"},{"url":"https://stream.ubtraffic.mn/live/101030.stream_480p/playlist.m3u8","label":"Дарь эхийн уулзвар (2)"}]},{"name":"Петровис","district":"Сүхбаатар","lat":47.9078598,"lon":106.9370049,"cams":[{"url":"https://stream.ubtraffic.mn/live/101040.stream_480p/playlist.m3u8","label":""},{"url":"https://stream.ubtraffic.mn/live/101013.stream_480p/playlist.m3u8","label":"Баянмонгол хорооллын хойд явган хүний гарц"},{"url":"https://stream.ubtraffic.mn/live/101041.stream_480p/playlist.m3u8","label":"Баянмонгол хорооллын хойд явган хүний гарц (3)"}]},{"name":"Петровис","district":"Сүхбаатар","lat":47.9087982,"lon":106.9127405,"cams":[{"url":"https://stream.ubtraffic.mn/live/101042.stream_480p/playlist.m3u8","label":"Моннис-н зүүн урд уулзвар"}]},{"name":"Петровис ШТС","district":"Сүхбаатар","lat":47.9282093,"lon":106.9368482,"cams":[{"url":"https://stream.ubtraffic.mn/live/101029.stream_480p/playlist.m3u8","label":"Дарь эхийн уулзвар"},{"url":"https://stream.ubtraffic.mn/live/101030.stream_480p/playlist.m3u8","label":"Дарь эхийн уулзвар (2)"}]},{"name":"Петровис ШТС","district":"Сүхбаатар","lat":47.9289051,"lon":106.9364819,"cams":[{"url":"https://stream.ubtraffic.mn/live/101029.stream_480p/playlist.m3u8","label":"Дарь эхийн уулзвар"},{"url":"https://stream.ubtraffic.mn/live/101030.stream_480p/playlist.m3u8","label":"Дарь эхийн уулзвар (2)"}]},{"name":"Петровис ШТС","district":"Сүхбаатар","lat":47.9305016,"lon":106.9267816,"cams":[{"url":"https://stream.ubtraffic.mn/live/101031.stream_480p/playlist.m3u8","label":"100-н айлын уулзвар"}]},{"name":"Сод Монгол ШТС-43","district":"Сүхбаатар","lat":47.9340722,"lon":106.9159333,"cams":[{"url":"https://stream.ubtraffic.mn/live/101022.stream_480p/playlist.m3u8","label":"32-р тойргийн уулзвар — Шунхлай"}]},{"name":"УБ ШТС-18","district":"Сүхбаатар","lat":47.9400357,"lon":106.9141446,"cams":[{"url":"https://stream.ubtraffic.mn/live/101022.stream_480p/playlist.m3u8","label":"32-р тойргийн уулзвар — Шунхлай"}]},{"name":"УБ ШТС-5","district":"Сүхбаатар","lat":47.907918,"lon":106.9351674,"cams":[{"url":"https://stream.ubtraffic.mn/live/101013.stream_480p/playlist.m3u8","label":""},{"url":"https://stream.ubtraffic.mn/live/101040.stream_480p/playlist.m3u8","label":"Баянмонгол хорооллын хойд явган хүний гарц (2)"},{"url":"https://stream.ubtraffic.mn/live/101041.stream_480p/playlist.m3u8","label":"Баянмонгол хорооллын хойд явган хүний гарц (3)"}]},{"name":"УБ ШТС-7","district":"Сүхбаатар","lat":47.928767,"lon":106.934937,"cams":[{"url":"https://stream.ubtraffic.mn/live/101029.stream_480p/playlist.m3u8","label":"Дарь эхийн уулзвар"},{"url":"https://stream.ubtraffic.mn/live/101030.stream_480p/playlist.m3u8","label":"Дарь эхийн уулзвар (2)"}]},{"name":"ШТС (нэргүй)","district":"Сүхбаатар","lat":47.928301,"lon":106.9369267,"cams":[{"url":"https://stream.ubtraffic.mn/live/101029.stream_480p/playlist.m3u8","label":"Дарь эхийн уулзвар"},{"url":"https://stream.ubtraffic.mn/live/101030.stream_480p/playlist.m3u8","label":"Дарь эхийн уулзвар (2)"}]},{"name":"ШТС (нэргүй)","district":"Сүхбаатар","lat":47.9085843,"lon":106.9345479,"cams":[{"url":"https://stream.ubtraffic.mn/live/101041.stream_480p/playlist.m3u8","label":""},{"url":"https://stream.ubtraffic.mn/live/101013.stream_480p/playlist.m3u8","label":"Баянмонгол хорооллын хойд явган хүний гарц"}]},{"name":"ШТС-05 ЗГАБ","district":"Сүхбаатар","lat":47.92798954376965,"lon":106.90788924694061,"cams":[{"url":"https://stream.ubtraffic.mn/live/101032.stream_480p/playlist.m3u8","label":""},{"url":"https://stream.ubtraffic.mn/live/101033.stream_480p/playlist.m3u8","label":"Баянбүрдийн тойргийн уулзвар (2)"}]},{"name":"ШТС-124 Дамба-2","district":"Сүхбаатар","lat":47.9841767,"lon":106.9365993,"cams":[{"url":"https://stream.ubtraffic.mn/live/101023.stream_480p/playlist.m3u8","label":"Дамбадаржаа хийдийн уулзвар"}]},{"name":"Шунхлай ШТС","district":"Сүхбаатар","lat":47.9266851,"lon":106.941915,"cams":[{"url":"https://stream.ubtraffic.mn/live/32771.stream_480p/playlist.m3u8","label":"Сансарын тойрог"}]},{"name":"Юнигаз ШТС","district":"Сүхбаатар","lat":47.9282601,"lon":106.9366248,"cams":[{"url":"https://stream.ubtraffic.mn/live/101029.stream_480p/playlist.m3u8","label":"Дарь эхийн уулзвар"},{"url":"https://stream.ubtraffic.mn/live/101030.stream_480p/playlist.m3u8","label":"Дарь эхийн уулзвар (2)"}]},{"name":"Петровис ШТС","district":"Хан-Уул","lat":47.8961627,"lon":106.8859044,"cams":[{"url":"https://stream.ubtraffic.mn/live/101012.stream_480p/playlist.m3u8","label":"Мишээл экспогийн хойд уулзвар"}]},{"name":"Петровис ШТС","district":"Хан-Уул","lat":47.9058631,"lon":106.9113847,"cams":[{"url":"https://stream.ubtraffic.mn/live/101056.stream_480p/playlist.m3u8","label":"Скайтел төвийн зүүн хойд явган хүний гарц"}]},{"name":"Сод Монгол ШТС","district":"Хан-Уул","lat":47.8971923,"lon":106.8871658,"cams":[{"url":"https://stream.ubtraffic.mn/live/101012.stream_480p/playlist.m3u8","label":"Мишээл экспогийн хойд уулзвар"}]},{"name":"ШТС (нэргүй)","district":"Хан-Уул","lat":47.9043357,"lon":106.9094324,"cams":[{"url":"https://stream.ubtraffic.mn/live/101056.stream_480p/playlist.m3u8","label":"Скайтел төвийн зүүн хойд явган хүний гарц"}]},{"name":"МТ ШТС","district":"Чингэлтэй","lat":47.9268668,"lon":106.8863891,"cams":[{"url":"https://stream.ubtraffic.mn/live/101035.stream_480p/playlist.m3u8","label":"ЭХЭМҮТ-н баруун хойд уулзвар"}]},{"name":"Петровис ШТС","district":"Чингэлтэй","lat":47.9250128,"lon":106.8968833,"cams":[{"url":"https://stream.ubtraffic.mn/live/32774.stream_480p/playlist.m3u8","label":"Тасганы уулзвар"},{"url":"https://stream.ubtraffic.mn/live/101034.stream_480p/playlist.m3u8","label":"Тасганы овооны уулзвар"}]},{"name":"Синчи-Ойл ШТС","district":"Чингэлтэй","lat":47.9266023,"lon":106.9014519,"cams":[{"url":"https://stream.ubtraffic.mn/live/101034.stream_480p/playlist.m3u8","label":""}]},{"name":"Сод Монгол ШТС","district":"Чингэлтэй","lat":47.9263598,"lon":106.9007348,"cams":[{"url":"https://stream.ubtraffic.mn/live/101034.stream_480p/playlist.m3u8","label":"Тасганы овооны уулзвар"}]},{"name":"Сод Монгол ШТС","district":"Чингэлтэй","lat":47.9080757,"lon":106.9073654,"cams":[{"url":"https://stream.ubtraffic.mn/live/101014.stream_480p/playlist.m3u8","label":"Урбанек төвийн баруун урд уулзвар"},{"url":"https://stream.ubtraffic.mn/live/101043.stream_480p/playlist.m3u8","label":"Урбанек төвийн баруун урд уулзвар (2)"}]},{"name":"Сод Монгол ШТС","district":"Чингэлтэй","lat":47.937249,"lon":106.8835198,"cams":[{"url":"https://stream.ubtraffic.mn/live/101010.stream_480p/playlist.m3u8","label":""}]},{"name":"Сод монгол шатахуун түгээх станц 1","district":"Чингэлтэй","lat":47.9144704,"lon":106.8886501,"cams":[{"url":"https://stream.ubtraffic.mn/live/101045.stream_480p/playlist.m3u8","label":"ТБД андуудын урд явган хүний гарц"}]},{"name":"УБ ШТС-1","district":"Чингэлтэй","lat":47.9086404,"lon":106.9038875,"cams":[{"url":"https://stream.ubtraffic.mn/live/101014.stream_480p/playlist.m3u8","label":"Урбанек төвийн баруун урд уулзвар"},{"url":"https://stream.ubtraffic.mn/live/101043.stream_480p/playlist.m3u8","label":"Урбанек төвийн баруун урд уулзвар (2)"}]},{"name":"ШТС (нэргүй)","district":"Чингэлтэй","lat":47.929091,"lon":106.9053528,"cams":[{"url":"https://stream.ubtraffic.mn/live/101032.stream_480p/playlist.m3u8","label":"Баянбүрдийн тойргийн уулзвар"}]},{"name":"ШТС 32","district":"Чингэлтэй","lat":47.92554535442019,"lon":106.89875369009559,"cams":[{"url":"https://stream.ubtraffic.mn/live/32774.stream_480p/playlist.m3u8","label":"Тасганы уулзвар"},{"url":"https://stream.ubtraffic.mn/live/101034.stream_480p/playlist.m3u8","label":"Тасганы овооны уулзвар"}]},{"name":"ШТС-08 Тээврийн товчоо","district":"Чингэлтэй","lat":47.9091691,"lon":106.8962458,"cams":[{"url":"https://stream.ubtraffic.mn/live/101044.stream_480p/playlist.m3u8","label":"Нарны гүүрний зүүн уулзвар"}]}];
+const API = 'https://benzin.mn/api/stations?limit=3000';
+const MAX_RETRIES = 8;          // 480p дамжуулалт сэрэхэд 10-30с 404 өгдөг
+const STALL_CHECK_MS = 15000;   // гацсан бол дахин холбох
+
+const $ = (s) => document.querySelector(s);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+
+let cams = [];   // [{url,label,stations:[],districts:[]}]
+let page = 0;
+let favs = new Set(store.get('favs', []));
+let rotTimer = null;
+
+function buildCams(stations) {
+  const byUrl = new Map();
+  for (const s of stations) {
+    for (const c of s.cams || []) {
+      if (!c || !c.url) continue;
+      let e = byUrl.get(c.url);
+      if (!e) {
+        e = { url: c.url, label: (c.label || '').trim(), stations: [], districts: new Set() };
+        byUrl.set(c.url, e);
+      }
+      if (!e.label && c.label) e.label = c.label.trim();
+      if (!e.stations.includes(s.name)) e.stations.push(s.name);
+      if (s.district) e.districts.add(s.district);
+    }
+  }
+  return [...byUrl.values()].map((e) => ({
+    ...e,
+    id: (e.url.match(/live\/([^/]+?)\.stream/) || [])[1] || e.url,
+    label: e.label || ('Камер ' + ((e.url.match(/live\/(\d+)/) || [])[1] || '')),
+    districts: [...e.districts],
+  })).sort((a, b) => a.label.localeCompare(b.label, 'mn'));
+}
+
+async function load(force) {
+  $('#stat').textContent = 'Ачаалж байна…';
+  let stations = null, live = false;
+  try {
+    const r = await fetch(API, { cache: force ? 'no-store' : 'default' });
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    stations = (d.stations || d).filter((s) => Array.isArray(s.cams) && s.cams.length);
+    live = true;
+  } catch (e) {
+    stations = FALLBACK;
+  }
+  cams = buildCams(stations);
+  const districts = [...new Set(cams.flatMap((c) => c.districts))].sort((a, b) => a.localeCompare(b, 'mn'));
+  const sel = $('#district'), cur = sel.value;
+  sel.innerHTML = '<option value="">Бүх дүүрэг</option>' +
+    districts.map((d) => `<option>${esc(d)}</option>`).join('');
+  sel.value = districts.includes(cur) ? cur : '';
+  $('#warn').innerHTML = live ? '' :
+    '<div class="warn">benzin.mn-ээс жагсаалт татаж чадсангүй — хадгалсан хуулбарыг харуулж байна.</div>';
+  checkHls();
+  render();
+}
+
+function checkHls() {
+  const v = document.createElement('video');
+  if (!v.canPlayType('application/vnd.apple.mpegurl') && !v.canPlayType('application/x-mpegURL')) {
+    $('#warn').innerHTML += '<div class="warn">Энэ хөтөч HLS (.m3u8) дамжуулалтыг шууд тоглуулахгүй байж магадгүй. ' +
+      'Chrome/Edge-ийн хамгийн сүүлийн хувилбар эсвэл Safari ашиглана уу.</div>';
+  }
+}
+
+function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+function filtered() {
+  const q = $('#q').value.trim().toLowerCase();
+  const d = $('#district').value;
+  const fo = $('#favOnly').checked;
+  const list = cams.filter((c) =>
+    (!d || c.districts.includes(d)) &&
+    (!fo || favs.has(c.id)) &&
+    (!q || (c.label + ' ' + c.stations.join(' ') + ' ' + c.districts.join(' ')).toLowerCase().includes(q)));
+  // Дуртайг эхэнд нь
+  return list.sort((a, b) => (favs.has(b.id) - favs.has(a.id)));
+}
+
+function stopVideo(v) {
+  clearTimeout(v._retry); clearInterval(v._stall);
+  v.pause(); v.removeAttribute('src'); v.load();
+}
+
+/* <video src=m3u8> — crossorigin атрибутгүй байх ёстой (stream нь зөвхөн
+   ubtraffic.mn-д CORS зөвшөөрдөг, no-cors media load-д хамаарахгүй). */
+function attach(v, url, badge) {
+  v._tries = 0;
+  const start = () => {
+    v.src = url;
+    v.load();
+    const p = v.play(); if (p && p.catch) p.catch(() => {});
+  };
+  v.onplaying = () => { v._tries = 0; if (badge) { badge.textContent = '● LIVE'; badge.className = 'badge live'; } };
+  v.onerror = () => {
+    if (!v.hasAttribute('src')) return;
+    if (v._tries >= MAX_RETRIES) { if (badge) { badge.textContent = 'Ажиллахгүй байна'; badge.className = 'badge err'; } return; }
+    v._tries++;
+    if (badge) { badge.textContent = `Асааж байна… (${v._tries})`; badge.className = 'badge'; }
+    clearTimeout(v._retry);
+    v._retry = setTimeout(start, 4000);
+  };
+  // Гацалт шалгах: currentTime өөрчлөгдөхгүй бол дахин холбоно
+  let last = -1;
+  clearInterval(v._stall);
+  v._stall = setInterval(() => {
+    if (!v.hasAttribute('src') || document.hidden) return;
+    if (v.currentTime === last && v.readyState < 3) { v._tries = 0; start(); }
+    last = v.currentTime;
+  }, STALL_CHECK_MS);
+  if (badge) { badge.textContent = 'Асааж байна…'; badge.className = 'badge'; }
+  start();
+}
+
+function render() {
+  document.querySelectorAll('#grid video').forEach(stopVideo);
+  const list = filtered();
+  const per = +$('#per').value;
+  const pages = Math.max(1, Math.ceil(list.length / per));
+  if (page >= pages) page = 0;
+  const shown = list.slice(page * per, page * per + per);
+  $('#pageInfo').textContent = `${page + 1}/${pages}`;
+  $('#stat').textContent = `${list.length} камер (нийт ${cams.length})`;
+  const cols = per >= 999 ? 4 : per <= 4 ? 2 : per <= 9 ? 3 : 4;
+  $('#grid').style.setProperty('--cols', cols);
+  store.set('prefs', { per: $('#per').value, district: $('#district').value });
+
+  const grid = $('#grid');
+  grid.innerHTML = '';
+  if (!shown.length) { grid.innerHTML = '<div class="empty">Камер олдсонгүй.</div>'; return; }
+  for (const c of shown) {
+    const t = document.createElement('div');
+    t.className = 'tile' + (favs.has(c.id) ? ' fav' : '');
+    t.innerHTML = `
+      <video muted autoplay playsinline></video>
+      <span class="badge"></span>
+      <div class="tools">
+        <button data-a="fav" title="Дуртай">${favs.has(c.id) ? '★' : '☆'}</button>
+        <button data-a="re" title="Дахин холбох">⟳</button>
+        <button data-a="big" title="Томоор">⛶</button>
+      </div>
+      <div class="cap"><b>${esc(c.label)}</b><small>${esc(c.stations.join(', '))}${c.districts.length ? ' · ' + esc(c.districts.join(', ')) : ''}</small></div>`;
+    const v = t.querySelector('video'), badge = t.querySelector('.badge');
+    t.querySelector('[data-a=fav]').onclick = (e) => { e.stopPropagation(); toggleFav(c.id); };
+    t.querySelector('[data-a=re]').onclick = (e) => { e.stopPropagation(); attach(v, c.url, badge); };
+    t.querySelector('[data-a=big]').onclick = (e) => { e.stopPropagation(); openBig(c); };
+    t.ondblclick = () => openBig(c);
+    grid.appendChild(t);
+    attach(v, c.url, badge);
+  }
+}
+
+function toggleFav(id) {
+  favs.has(id) ? favs.delete(id) : favs.add(id);
+  store.set('favs', [...favs]);
+  render();
+}
+
+function openBig(c) {
+  $('#bigTitle').textContent = c.label;
+  $('#bigSub').textContent = c.stations.join(', ') + (c.districts.length ? ' · ' + c.districts.join(', ') : '');
+  $('#big').hidden = false;
+  attach($('#bigVideo'), c.url, null);
+}
+function closeBig() { $('#big').hidden = true; stopVideo($('#bigVideo')); }
+
+function setRotate() {
+  clearInterval(rotTimer);
+  if (!$('#rotate').checked) return;
+  const sec = Math.max(10, +$('#rotSec').value || 30);
+  rotTimer = setInterval(() => { if ($('#big').hidden) { next(); } }, sec * 1000);
+}
+function next() { const per = +$('#per').value; const pages = Math.max(1, Math.ceil(filtered().length / per)); page = (page + 1) % pages; render(); }
+function prev() { const per = +$('#per').value; const pages = Math.max(1, Math.ceil(filtered().length / per)); page = (page - 1 + pages) % pages; render(); }
+
+const prefs = store.get('prefs', {});
+if (prefs.per) $('#per').value = prefs.per;
+$('#q').oninput = () => { page = 0; render(); };
+$('#district').onchange = () => { page = 0; render(); };
+$('#favOnly').onchange = () => { page = 0; render(); };
+$('#per').onchange = () => { page = 0; render(); };
+$('#next').onclick = next; $('#prev').onclick = prev;
+$('#rotate').onchange = setRotate; $('#rotSec').onchange = setRotate;
+$('#reload').onclick = () => load(true);
+$('#bigClose').onclick = closeBig;
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeBig();
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowRight') next();
+  if (e.key === 'ArrowLeft') prev();
+});
+// Таб нуугдсан үед дамжуулалтыг зогсоож, буцаж ирэхэд дахин асаана
+document.addEventListener('visibilitychange', () => { if (!document.hidden) render(); else document.querySelectorAll('#grid video').forEach(stopVideo); });
+
+load().then(() => { if (prefs.district) { $('#district').value = prefs.district; render(); } });
+</script>
+</body>
+</html>
